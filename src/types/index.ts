@@ -67,7 +67,6 @@ export type DomainId = typeof LIFE_DOMAINS[number]['id']
 
 export interface User {
   uid: string
-  lfId?: string
   displayName: string
   email: string
   phone?: string

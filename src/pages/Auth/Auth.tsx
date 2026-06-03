@@ -1,4 +1,3 @@
-import { generateLFID } from '../../utils/generateLFID'
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { Eye, EyeOff, Mail, Lock, User, Phone, ArrowRight, Shield } from 'lucide-react'
@@ -65,7 +64,7 @@ export function LoginPage() {
     setLoading(true)
     setError('')
     try {
-      const loggedInUser = await signInWithEmail(email, password, role)
+    const loggedInUser = await signInWithEmail(email, password, role)
       
       setUser(loggedInUser)
       if (loggedInUser.role === 'mentor') {
@@ -245,7 +244,7 @@ export function RegisterPage() {
     e.preventDefault()
     setLoading(true)
     try {
-      const newUser = await signUpWithEmail(form.email, form.password, form.name, form.phone, 'user')
+    const newUser = await signUpWithEmail(form.email, form.password, form.name, form.phone, 'user')
       
       setUser(newUser)
       navigate('/onboarding')
