@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { Eye, EyeOff, Mail, Lock, User, Phone, ArrowRight, Shield } from 'lucide-react'
 import { useAuthStore } from '../../stores'
@@ -10,12 +10,36 @@ import './Auth.css'
 export function LoginPage() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const [role, setRole] = useState<'user' | 'mentor'>('user')
+  const [role, setRole] = useState<'seeker' | 'mentor'>('seeker')
   const [showPass, setShowPass] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-  const { setUser } = useAuthStore()
+  const { user, setUser } = useAuthStore()
   const navigate = useNavigate()
+
+  useEffect(() => {
+    if (user) {
+      if (user.role === 'mentor') {
+        const onboardingCompleted = (user as any).onboardingCompleted === true
+        const bio = (user as any).bio || ''
+        const qual = (user as any).qualification || (user as any).education || ''
+        const exp = (user as any).experience || (user as any).yearsOfExperience || ''
+        const hasProfile = bio.trim() !== '' && qual.trim() !== '' && String(exp).trim() !== ''
+
+        if (onboardingCompleted || hasProfile) {
+          navigate('/mentor-portal', { replace: true })
+        } else {
+          navigate('/mentor-onboarding', { replace: true })
+        }
+      } else {
+        if (user.onboardingComplete) {
+          navigate('/dashboard', { replace: true })
+        } else {
+          navigate('/onboarding', { replace: true })
+        }
+      }
+    }
+  }, [user, navigate])
 
   const handleGoogleLogin = async () => {
     setLoading(true)
@@ -24,7 +48,11 @@ export function LoginPage() {
       const loggedInUser = await signInWithGoogle(role)
       setUser(loggedInUser)
       if (loggedInUser.role === 'mentor') {
-        navigate('/mentor-portal')
+        if ((loggedInUser as any).onboardingCompleted === true) {
+          navigate('/mentor-portal')
+        } else {
+          navigate('/mentor-onboarding')
+        }
       } else if (loggedInUser.onboardingComplete) {
         navigate('/dashboard')
       } else {
@@ -45,7 +73,11 @@ export function LoginPage() {
       const loggedInUser = await signInAnonymously()
       setUser(loggedInUser)
       if (loggedInUser.role === 'mentor') {
-        navigate('/mentor-portal')
+        if ((loggedInUser as any).onboardingCompleted === true) {
+          navigate('/mentor-portal')
+        } else {
+          navigate('/mentor-onboarding')
+        }
       } else if (loggedInUser.onboardingComplete) {
         navigate('/dashboard')
       } else {
@@ -68,7 +100,11 @@ export function LoginPage() {
       
       setUser(loggedInUser)
       if (loggedInUser.role === 'mentor') {
-        navigate('/mentor-portal')
+        if ((loggedInUser as any).onboardingCompleted === true) {
+          navigate('/mentor-portal')
+        } else {
+          navigate('/mentor-onboarding')
+        }
       } else if (loggedInUser.onboardingComplete) {
         navigate('/dashboard')
       } else {
@@ -97,9 +133,9 @@ export function LoginPage() {
         <div className="role-selector" style={{ marginBottom: 'var(--sp-4)' }}>
           <button
             type="button"
-            className={`role-btn ${role === 'user' ? 'role-btn--active' : ''}`}
+            className={`role-btn ${role === 'seeker' ? 'role-btn--active' : ''}`}
             id="login-role-user"
-            onClick={() => setRole('user')}
+            onClick={() => setRole('seeker')}
           >
             <span className="role-btn__icon">🙋</span>
             <div>
@@ -126,10 +162,12 @@ export function LoginPage() {
             <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google" width="18" />
             Continue with Google
           </button>
-          <button className="auth-social-btn" id="anonymous-login" type="button" onClick={handleAnonymousLogin} disabled={loading} style={{ background: 'var(--clr-bg-card)', borderColor: 'var(--clr-border-strong)' }}>
-            <span style={{ fontSize: '1.1rem' }}>🎭</span>
-            Continue Anonymously
-          </button>
+          {role === 'seeker' && (
+            <button className="auth-social-btn" id="anonymous-login" type="button" onClick={handleAnonymousLogin} disabled={loading} style={{ background: 'var(--clr-bg-card)', borderColor: 'var(--clr-border-strong)' }}>
+              <span style={{ fontSize: '1.1rem' }}>🎭</span>
+              Continue Anonymously
+            </button>
+          )}
         </div>
 
         <div className="auth-divider"><span>or sign in with email</span></div>
@@ -194,19 +232,43 @@ export function LoginPage() {
 
 export function RegisterPage() {
   const [step, setStep] = useState(1)
-  const [form, setForm] = useState({ name: '', email: '', phone: '', password: '', role: 'user' as 'user' | 'mentor' })
+  const [form, setForm] = useState({ name: '', email: '', phone: '', password: '', role: 'seeker' as 'seeker' | 'mentor' })
   const [showPass, setShowPass] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-  const { setUser } = useAuthStore()
+  const { user, setUser } = useAuthStore()
   const navigate = useNavigate()
+
+  useEffect(() => {
+    if (user) {
+      if (user.role === 'mentor') {
+        const onboardingCompleted = (user as any).onboardingCompleted === true
+        const bio = (user as any).bio || ''
+        const qual = (user as any).qualification || (user as any).education || ''
+        const exp = (user as any).experience || (user as any).yearsOfExperience || ''
+        const hasProfile = bio.trim() !== '' && qual.trim() !== '' && String(exp).trim() !== ''
+
+        if (onboardingCompleted || hasProfile) {
+          navigate('/mentor-portal', { replace: true })
+        } else {
+          navigate('/mentor-onboarding', { replace: true })
+        }
+      } else {
+        if (user.onboardingComplete) {
+          navigate('/dashboard', { replace: true })
+        } else {
+          navigate('/onboarding', { replace: true })
+        }
+      }
+    }
+  }, [user, navigate])
 
   const update = (field: string, value: string) => setForm(f => ({ ...f, [field]: value }))
 
   const handleGoogleLogin = async () => {
     setLoading(true)
     try {
-      const loggedInUser = await signInWithGoogle('user')
+      const loggedInUser = await signInWithGoogle('seeker')
       setUser(loggedInUser)
       if (loggedInUser.onboardingComplete) {
         navigate('/dashboard')
@@ -244,7 +306,7 @@ export function RegisterPage() {
     e.preventDefault()
     setLoading(true)
     try {
-    const newUser = await signUpWithEmail(form.email, form.password, form.name, form.phone, 'user')
+    const newUser = await signUpWithEmail(form.email, form.password, form.name, form.phone, 'seeker')
       
       setUser(newUser)
       navigate('/onboarding')
@@ -271,9 +333,9 @@ export function RegisterPage() {
         <div className="role-selector">
           <button
             type="button"
-            className={`role-btn ${form.role === 'user' ? 'role-btn--active' : ''}`}
+            className={`role-btn ${form.role === 'seeker' ? 'role-btn--active' : ''}`}
             id="role-user"
-            onClick={() => update('role', 'user')}
+            onClick={() => update('role', 'seeker')}
           >
             <span className="role-btn__icon">🙋</span>
             <div>
@@ -392,6 +454,22 @@ export function MentorRegisterPage() {
   const { user, setUser } = useAuthStore()
   const navigate = useNavigate()
 
+  useEffect(() => {
+    if (user && user.role === 'mentor') {
+      const onboardingCompleted = (user as any).onboardingCompleted === true
+      const bio = (user as any).bio || ''
+      const qual = (user as any).qualification || (user as any).education || ''
+      const exp = (user as any).experience || (user as any).yearsOfExperience || ''
+      const hasProfile = bio.trim() !== '' && qual.trim() !== '' && String(exp).trim() !== ''
+
+      if (onboardingCompleted || hasProfile) {
+        navigate('/mentor-portal', { replace: true })
+      } else {
+        navigate('/mentor-onboarding', { replace: true })
+      }
+    }
+  }, [user, navigate])
+
   const update = (field: string, value: string) => setForm(f => ({ ...f, [field]: value }))
 
   const submitApplication = async (uid: string) => {
@@ -418,8 +496,8 @@ export function MentorRegisterPage() {
     setError('')
     try {
       let activeUser = user
-      if (!activeUser) {
-        activeUser = await signUpWithEmail(form.email, form.password, form.name, form.phone, 'user')
+      if (!activeUser || activeUser.isAnonymous) {
+        activeUser = await signUpWithEmail(form.email, form.password, form.name, form.phone, 'seeker')
         setUser(activeUser)
       }
       await submitApplication(activeUser.uid)
@@ -445,7 +523,7 @@ export function MentorRegisterPage() {
 
         <form className="auth-form" onSubmit={handleSubmit}>
           {error && <div className="auth-error">{error}</div>}
-          {!user && (
+          {(!user || user.isAnonymous) && (
             <>
               <div className="auth-form-grid">
                 <div className="form-group">

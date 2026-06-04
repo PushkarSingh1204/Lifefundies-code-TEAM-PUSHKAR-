@@ -1,5 +1,8 @@
 import { useState, useEffect } from 'react'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { Calendar as CalendarIcon, Clock, Users, Star, XCircle, Edit3, Trash2, Video, Save } from 'lucide-react'
+import { doc, updateDoc } from 'firebase/firestore'
+import { db } from '../../lib/firebase'
 import { useAuthStore } from '../../stores'
 import { getInitials } from '../../utils'
 import { 
@@ -8,9 +11,12 @@ import {
   createGuideSlot, 
   deleteGuideSlot, 
   completeBookingSession, 
-  getGuideBookings,
-  getGuideSlotsAll,
-  getSessionsForGuide
+  subscribeToGuideBookings,
+  subscribeToGuideSlots,
+  subscribeToSessionsForGuide,
+  markBookingReminderSent,
+  markBooking10MinReminderSent,
+  triggerWhatsAppForBooking
 } from '../../lib/bookingRepository'
 import { updateMentorProfile } from '../../lib/userRepository'
 import { MENTOR_CATEGORIES, getCategoryPrices, getSessionPrice, normalizeMentorCategories } from '../../lib/pricing'
@@ -18,9 +24,51 @@ import VideoRoom from '../../components/VideoRoom'
 import './MentorPortal.css'
 
 export default function MentorPortalPage() {
-  const { user } = useAuthStore()
+  const { user, setUser } = useAuthStore()
+  const navigate = useNavigate()
+  const location = useLocation()
   
+  useEffect(() => {
+    if (user && (user as any).role === 'mentor') {
+      const onboardingCompleted = (user as any).onboardingCompleted === true
+
+      if (!onboardingCompleted) {
+        const bio = (user as any).bio || ''
+        const qual = (user as any).qualification || (user as any).education || ''
+        const exp = (user as any).experience || (user as any).yearsOfExperience || ''
+        const hasExistingProfile = bio.trim() !== '' && qual.trim() !== '' && String(exp).trim() !== ''
+
+        if (hasExistingProfile) {
+          console.log('Healing mentor onboardingCompleted flag in database...')
+          updateDoc(doc(db, 'users', user.uid), {
+            onboardingCompleted: true,
+            mentorOnboardingComplete: true,
+            onboardingComplete: true
+          }).then(() => {
+            setUser({
+              ...user,
+              onboardingCompleted: true,
+              mentorOnboardingComplete: true,
+              onboardingComplete: true
+            } as any)
+          }).catch(err => console.error('Failed to heal onboarding flag:', err))
+        } else {
+          navigate('/mentor-onboarding', { replace: true })
+        }
+      }
+    }
+  }, [user, navigate, setUser])
+
   const [activeTab, setActiveTab] = useState<'overview' | 'requests' | 'calendar' | 'earnings' | 'profile'>('overview')
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search)
+    const tab = params.get('tab')
+    if (tab && ['overview', 'requests', 'calendar', 'earnings', 'profile'].includes(tab)) {
+      setActiveTab(tab as any)
+    }
+  }, [location.search])
+
   const [bookings, setBookings] = useState<any[]>([])
   const [slots, setSlots] = useState<any[]>([])
   const [sessions, setSessions] = useState<any[]>([])
@@ -34,6 +82,17 @@ export default function MentorPortalPage() {
   const [newSlotTime, setNewSlotTime] = useState('10:00')
   const [newSlotDuration, setNewSlotDuration] = useState(30)
   const [newSlotCategory, setNewSlotCategory] = useState('peer-buddy')
+
+  // Auto-init slot category to the first offered category for this mentor
+  useEffect(() => {
+    if (user) {
+      const allowedCats = normalizeMentorCategories((user as any).categories)
+      if (allowedCats.length > 0) {
+        setNewSlotCategory(allowedCats[0])
+        setNewSlotDuration(getCategoryPrices(allowedCats[0])[0].duration)
+      }
+    }
+  }, [user])
   const [creatingSlot, setCreatingSlot] = useState(false)
   const [savingProfile, setSavingProfile] = useState(false)
   const [profileForm, setProfileForm] = useState({
@@ -70,36 +129,93 @@ export default function MentorPortalPage() {
 
  
   const fetchPortalData = async () => {
-    if (!user?.uid) return
-    try {
-      setLoadingBookings(true)
-      setLoadingSlots(true)
-      const [bookingsData, slotsData, sessionsData] = await Promise.all([
-        getGuideBookings(user.uid),
-        getGuideSlotsAll(user.uid),
-        getSessionsForGuide(user.uid)
-      ])
-      setBookings(bookingsData)
-      setSlots(slotsData)
-      setSessions(sessionsData)
-    } catch (err) {
-      console.error('Error fetching portal data:', err)
-    } finally {
-      setLoadingBookings(false)
-      setLoadingSlots(false)
-    }
+    // Under real-time subscriptions, updates are handled automatically by Firestore snapshots.
   }
 
   useEffect(() => {
-    fetchPortalData()
+    if (!user?.uid) return
+
+    setLoadingBookings(true)
+    setLoadingSlots(true)
+
+    const unsubscribeBookings = subscribeToGuideBookings(user.uid, (data) => {
+      setBookings(data)
+      setLoadingBookings(false)
+    })
+
+    const unsubscribeSlots = subscribeToGuideSlots(user.uid, (data) => {
+      setSlots(data)
+      setLoadingSlots(false)
+    })
+
+    const unsubscribeSessions = subscribeToSessionsForGuide(user.uid, (data) => {
+      setSessions(data)
+    })
+
+    return () => {
+      unsubscribeBookings()
+      unsubscribeSlots()
+      unsubscribeSessions()
+    }
   }, [user?.uid])
+
+  // Automated background pre-session WhatsApp reminder check for mentors
+  useEffect(() => {
+    if (!bookings || bookings.length === 0) return
+
+    const checkReminders = () => {
+      const now = Date.now()
+      bookings.forEach(async (booking) => {
+        if (booking.status !== 'confirmed') return
+
+        // Calculate time to session in minutes
+        if (!booking.sessionDate || !booking.sessionTime) return
+        const sessionDateTime = new Date(`${booking.sessionDate}T${booking.sessionTime}`)
+        const diffMs = sessionDateTime.getTime() - now
+        const mToSession = diffMs / (1000 * 60)
+
+        // 1. Trigger 30-min reminder if session starts in <= 30 minutes, is > 10 minutes, and reminderSent is not true
+        if (mToSession <= 30 && mToSession > 10 && booking.reminderSent !== true) {
+          console.log(`[Mentor Portal Automated Reminder] Triggering 30-min WhatsApp reminder for booking: ${booking.id}`)
+          try {
+            // Immediately mark as sent locally and in db to prevent double triggers
+            await markBookingReminderSent(booking.id)
+            // Trigger notifications
+            triggerWhatsAppForBooking(booking.id, 'reminder')
+          } catch (err) {
+            console.error('Failed to trigger automated 30-min WhatsApp reminder:', err)
+          }
+        }
+
+        // 2. Trigger 10-min reminder if session starts in <= 10 minutes, is >= -5 minutes, and reminder10Sent is not true
+        if (mToSession <= 10 && mToSession >= -5 && booking.reminder10Sent !== true) {
+          console.log(`[Mentor Portal Automated Reminder] Triggering 10-min WhatsApp reminder for booking: ${booking.id}`)
+          try {
+            // Immediately mark as sent locally and in db to prevent double triggers
+            await markBooking10MinReminderSent(booking.id)
+            // Trigger notifications
+            triggerWhatsAppForBooking(booking.id, 'reminder10')
+          } catch (err) {
+            console.error('Failed to trigger automated 10-min WhatsApp reminder:', err)
+          }
+        }
+      })
+    }
+
+    // Run check immediately, then schedule every 30 seconds
+    checkReminders()
+    const interval = setInterval(checkReminders, 30000)
+    return () => clearInterval(interval)
+  }, [bookings])
+
 
 
   
   const handleAcceptRequest = async (bookingId: string) => {
+    if (!user?.uid) return
     setActionLoading(bookingId)
     try {
-      await acceptBookingRequest(bookingId)
+      await acceptBookingRequest(bookingId, user.uid)
       await fetchPortalData()
     } catch (err) {
       console.error('Failed to accept request:', err)
@@ -110,9 +226,10 @@ export default function MentorPortalPage() {
   }
 
   const handleDeclineRequest = async (bookingId: string) => {
+    if (!user?.uid) return
     setActionLoading(bookingId)
     try {
-      await declineBookingRequest(bookingId)
+      await declineBookingRequest(bookingId, user.uid)
       await fetchPortalData()
     } catch (err) {
       console.error('Failed to decline request:', err)
@@ -120,6 +237,50 @@ export default function MentorPortalPage() {
     } finally {
       setActionLoading(null)
     }
+  }
+
+  const getMinutesToSession = (sessionDate: string, sessionTime: string) => {
+    if (!sessionDate || !sessionTime) return Infinity
+    const sessionDateTime = new Date(`${sessionDate}T${sessionTime}`)
+    const diffMs = sessionDateTime.getTime() - Date.now()
+    return diffMs / (1000 * 60)
+  }
+
+  const handleSendReminder = async (booking: any) => {
+    const mentorName = user?.displayName || 'Mentor'
+    const clientName = booking.clientName || 'Client'
+    const phone = booking.clientPhone
+    if (!phone) {
+      alert('Client phone number is not available to send WhatsApp reminder.')
+      return
+    }
+    const sessionLink = window.location.origin + '/mentor-portal'
+    const text = `Hi ${clientName}, this is a reminder that your session with ${mentorName} starts in 30 minutes. Join here: ${sessionLink}`
+    
+    let formattedPhone = phone.trim()
+    if (formattedPhone.length === 10) {
+      formattedPhone = '91' + formattedPhone
+    }
+
+    try {
+      await markBookingReminderSent(booking.id)
+      window.open(`https://api.whatsapp.com/send?phone=${formattedPhone}&text=${encodeURIComponent(text)}`, '_blank')
+    } catch (err) {
+      console.error(err)
+    }
+  }
+
+  const handleDirectWhatsAppMessage = (phone: string, clientName: string) => {
+    if (!phone) {
+      alert('Seeker phone number is not available to send WhatsApp message.')
+      return
+    }
+    let formattedPhone = phone.trim().replace(/[\s+-]/g, '')
+    if (formattedPhone.length === 10) {
+      formattedPhone = '91' + formattedPhone
+    }
+    const text = `Hi ${clientName}, this is your mentor from LifeFundies.`
+    window.open(`https://wa.me/${formattedPhone}?text=${encodeURIComponent(text)}`, '_blank')
   }
 
   const handleCompleteSession = async (bookingId: string, sessionId: string) => {
@@ -353,15 +514,38 @@ export default function MentorPortalPage() {
                             <button 
                               className="btn btn-primary btn-sm" 
                               onClick={() => setActiveSessionId(session.sessionId)} 
-                              style={{ display: 'flex', alignItems: 'center', gap: '4px' }}
+                              style={{ display: 'flex', alignItems: 'center', gap: '4px', width: '100%' }}
                             >
                               <Video size={14} /> Start Call
                             </button>
                             <button 
+                              type="button"
+                              className="btn btn-outline btn-sm" 
+                              onClick={() => handleDirectWhatsAppMessage(session.clientPhone, session.clientName)}
+                              style={{ fontSize: '0.75rem', height: '28px', width: '100%' }}
+                            >
+                              Message Seeker
+                            </button>
+                            {(() => {
+                              const mToSession = getMinutesToSession(session.sessionDate, session.sessionTime)
+                              if (mToSession <= 30 && mToSession >= -60 && !session.reminderSent) {
+                                return (
+                                  <button 
+                                    className="btn btn-accent btn-sm" 
+                                    onClick={() => handleSendReminder(session)}
+                                    style={{ fontSize: '0.75rem', height: '28px', width: '100%' }}
+                                  >
+                                    WhatsApp Seeker
+                                  </button>
+                                )
+                              }
+                              return null
+                            })()}
+                            <button 
                               className="btn btn-outline btn-sm" 
                               onClick={() => handleCompleteSession(session.id, session.sessionId)}
                               disabled={actionLoading === session.id}
-                              style={{ fontSize: '0.75rem', height: '28px' }}
+                              style={{ fontSize: '0.75rem', height: '28px', width: '100%' }}
                             >
                               Complete
                             </button>

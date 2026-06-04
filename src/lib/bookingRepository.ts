@@ -17,6 +17,8 @@ import {
 } from 'firebase/firestore'
 import { db } from './firebase'
 import { createNotification } from './notificationRepository'
+import { getCategoryPrices, normalizeMentorCategories } from './pricing'
+import { sendWhatsAppNotification } from './whatsappService'
 
 /**
  * BookingRepository
@@ -160,6 +162,30 @@ export const createBooking = async (bookingDetails: {
         throw new Error('Slot not available')
       }
 
+      // Backend Verification: Load Guide Profile and Validate Pricing/Duration Rules
+      const guideRef = doc(db, 'users', bookingDetails.guideId)
+      const guideDoc = await transaction.get(guideRef)
+      if (!guideDoc.exists()) {
+        throw new Error('Mentor profile not found')
+      }
+      const guideData = guideDoc.data()
+
+      // Validate mentor offers selected category
+      const allowedCategories = normalizeMentorCategories(guideData.categories)
+      if (!allowedCategories.includes(bookingDetails.category as any)) {
+        throw new Error(`Category "${bookingDetails.category}" is not offered by this mentor.`)
+      }
+
+      // Validate duration and price mapping
+      const prices = getCategoryPrices(bookingDetails.category)
+      const matchedPriceOption = prices.find(p => p.duration === bookingDetails.duration)
+      if (!matchedPriceOption) {
+        throw new Error(`Duration ${bookingDetails.duration}m is not permitted for category ${bookingDetails.category}.`)
+      }
+      if (bookingDetails.price !== matchedPriceOption.price) {
+        throw new Error(`Price mismatch: expected ${matchedPriceOption.price}, got ${bookingDetails.price}`)
+      }
+
       const bookingRef = doc(collection(db, 'bookings'))
       const bookingData = {
         bookingId: bookingRef.id,
@@ -167,6 +193,7 @@ export const createBooking = async (bookingDetails: {
         guideId: bookingDetails.guideId,
         slotId: bookingDetails.slotId,
         domain: bookingDetails.domain,
+        category: bookingDetails.category,
         selectedIssue: bookingDetails.selectedIssue || '',
         userNotes: bookingDetails.userNotes || '',
         price: bookingDetails.price,
@@ -217,6 +244,13 @@ export const confirmPayment = async (paymentDetails: {
       }
 
       const bookingData = bookingDoc.data()
+
+      if (bookingData.paymentStatus === 'completed') {
+        return {
+          bookingId: paymentDetails.bookingId,
+          status: bookingData.status
+        }
+      }
 
       transaction.update(bookingRef, {
         paymentId: paymentDetails.paymentId,
@@ -271,6 +305,9 @@ export const confirmPayment = async (paymentDetails: {
       }
     })
 
+    // Asynchronously trigger WhatsApp notifications (does not block)
+    triggerWhatsAppForBooking(paymentDetails.bookingId, 'booking')
+
     return result
   } catch (error) {
     console.error('Payment confirmation failed:', error)
@@ -296,6 +333,7 @@ export const subscribeToUserBookings = (userId: string, callback: (bookings: any
 
       let mentorName = 'LifeFundies Mentor'
       let mentorPhotoURL = ''
+      let mentorPhone = ''
 
       if (guideId) {
         try {
@@ -304,6 +342,7 @@ export const subscribeToUserBookings = (userId: string, callback: (bookings: any
             const guideData = guideDoc.data()
             mentorName = guideData.displayName || guideData.fullName || mentorName
             mentorPhotoURL = guideData.photoURL || ''
+            mentorPhone = guideData.phone || guideData.phoneNumber || ''
           }
         } catch (e) {
           console.error('Error fetching guide profile in booking join:', e)
@@ -316,6 +355,7 @@ export const subscribeToUserBookings = (userId: string, callback: (bookings: any
         mentor: mentorName,
         mentorName,
         mentorPhotoURL,
+        mentorPhone,
         createdAt: data.createdAt?.toDate?.() || data.createdAt || new Date()
       }
     }))
@@ -340,6 +380,7 @@ export const subscribeToGuideBookings = (guideId: string, callback: (bookings: a
 
       let clientName = `Client (${userId.substring(0, 6)})`
       let clientPhotoURL = ''
+      let clientPhone = ''
 
       if (userId) {
         try {
@@ -348,6 +389,7 @@ export const subscribeToGuideBookings = (guideId: string, callback: (bookings: a
             const userData = userDoc.data()
             clientName = userData.displayName || userData.fullName || clientName
             clientPhotoURL = userData.photoURL || ''
+            clientPhone = userData.phone || userData.phoneNumber || ''
           }
         } catch (e) {
           console.error('Error fetching user profile in booking join:', e)
@@ -359,6 +401,7 @@ export const subscribeToGuideBookings = (guideId: string, callback: (bookings: a
         ...data,
         clientName,
         clientPhotoURL,
+        clientPhone,
         createdAt: data.createdAt?.toDate?.() || data.createdAt || new Date()
       }
     }))
@@ -383,6 +426,7 @@ export const getUserBookings = async (userId: string): Promise<any[]> => {
 
       let mentorName = 'LifeFundies Mentor'
       let mentorPhotoURL = ''
+      let mentorPhone = ''
 
       if (guideId) {
         try {
@@ -391,6 +435,7 @@ export const getUserBookings = async (userId: string): Promise<any[]> => {
             const guideData = guideDoc.data()
             mentorName = guideData.displayName || guideData.fullName || mentorName
             mentorPhotoURL = guideData.photoURL || ''
+            mentorPhone = guideData.phone || guideData.phoneNumber || ''
           }
         } catch (e) {
           console.error('Error fetching guide profile in booking join:', e)
@@ -403,6 +448,7 @@ export const getUserBookings = async (userId: string): Promise<any[]> => {
         mentor: mentorName,
         mentorName,
         mentorPhotoURL,
+        mentorPhone,
         createdAt: data.createdAt?.toDate?.() || data.createdAt || new Date()
       }
     }))
@@ -428,6 +474,7 @@ export const getGuideBookings = async (guideId: string): Promise<any[]> => {
 
       let clientName = `Client (${userId.substring(0, 6)})`
       let clientPhotoURL = ''
+      let clientPhone = ''
 
       if (userId) {
         try {
@@ -436,6 +483,7 @@ export const getGuideBookings = async (guideId: string): Promise<any[]> => {
             const userData = userDoc.data()
             clientName = userData.displayName || userData.fullName || clientName
             clientPhotoURL = userData.photoURL || ''
+            clientPhone = userData.phone || userData.phoneNumber || ''
           }
         } catch (e) {
           console.error('Error fetching user profile in booking join:', e)
@@ -447,6 +495,7 @@ export const getGuideBookings = async (guideId: string): Promise<any[]> => {
         ...data,
         clientName,
         clientPhotoURL,
+        clientPhone,
         createdAt: data.createdAt?.toDate?.() || data.createdAt || new Date()
       }
     }))
@@ -457,6 +506,7 @@ export const getGuideBookings = async (guideId: string): Promise<any[]> => {
     return []
   }
 }
+
 
 export const getGuideSlotsAll = async (guideId: string): Promise<any[]> => {
   try {
@@ -497,7 +547,7 @@ export const getSessionsForGuide = async (guideId: string): Promise<any[]> => {
 // 🧑‍🏫 GUIDE PORTAL OPERATIONS
 // ============================================
 
-export const acceptBookingRequest = async (bookingId: string) => {
+export const acceptBookingRequest = async (bookingId: string, requesterUid: string) => {
   try {
     const result = await runTransaction(db, async (transaction) => {
       const bookingRef = doc(db, 'bookings', bookingId)
@@ -506,8 +556,18 @@ export const acceptBookingRequest = async (bookingId: string) => {
         throw new Error('Booking not found')
       }
       const bookingData = bookingDoc.data()
+
+      // Enforce ownership: only the assigned guide/mentor can accept their bookings
+      if (bookingData.guideId !== requesterUid) {
+        throw new Error('Unauthorized: Only the assigned mentor can accept this booking request')
+      }
+
       const existingSessionId = bookingData.sessionId || null
       let sessionId = existingSessionId
+
+      if (bookingData.status === 'confirmed') {
+        return { success: true, sessionId: existingSessionId }
+      }
 
       // Update booking status
       transaction.update(bookingRef, {
@@ -577,6 +637,9 @@ export const acceptBookingRequest = async (bookingId: string) => {
 
       return { success: true, sessionId }
     })
+    // Asynchronously trigger WhatsApp notifications
+    triggerWhatsAppForBooking(bookingId, 'acceptance')
+
     return result
   } catch (error) {
     console.error('Error accepting booking request:', error)
@@ -584,7 +647,7 @@ export const acceptBookingRequest = async (bookingId: string) => {
   }
 }
 
-export const declineBookingRequest = async (bookingId: string) => {
+export const declineBookingRequest = async (bookingId: string, requesterUid: string) => {
   try {
     const result = await runTransaction(db, async (transaction) => {
       const bookingRef = doc(db, 'bookings', bookingId)
@@ -593,6 +656,15 @@ export const declineBookingRequest = async (bookingId: string) => {
         throw new Error('Booking not found')
       }
       const bookingData = bookingDoc.data()
+
+      // Enforce ownership: only the assigned guide/mentor can decline their bookings
+      if (bookingData.guideId !== requesterUid) {
+        throw new Error('Unauthorized: Only the assigned mentor can decline this booking request')
+      }
+
+      if (bookingData.status === 'cancelled') {
+        return { success: true }
+      }
 
       // Update booking status
       transaction.update(bookingRef, {
@@ -625,6 +697,9 @@ export const declineBookingRequest = async (bookingId: string) => {
 
       return { success: true }
     })
+    // Asynchronously trigger WhatsApp notifications
+    triggerWhatsAppForBooking(bookingId, 'rejection')
+
     return result
   } catch (error) {
     console.error('Error declining booking request:', error)
@@ -643,6 +718,15 @@ export const cancelBooking = async (bookingId: string, cancelledBy: string) => {
       }
 
       const bookingData = bookingDoc.data()
+
+      // Enforce ownership: only the booker or assigned mentor can cancel
+      if (cancelledBy !== bookingData.userId && cancelledBy !== bookingData.guideId) {
+        throw new Error('Unauthorized: You are not authorized to cancel this booking')
+      }
+
+      if (bookingData.status === 'cancelled') {
+        return { success: true, bookingId }
+      }
 
       transaction.update(bookingRef, {
         status: 'cancelled',
@@ -672,6 +756,9 @@ export const cancelBooking = async (bookingId: string, cancelledBy: string) => {
 
       return { success: true, bookingId }
     })
+
+    // Asynchronously trigger WhatsApp notifications
+    triggerWhatsAppForBooking(bookingId, 'cancellation')
 
     return result
   } catch (error) {
@@ -712,3 +799,293 @@ export const subscribeToSessionsForGuide = (guideId: string, callback: (sessions
     console.error('Failed to listen to guide sessions:', err)
   })
 }
+
+export const markBookingReminderSent = async (bookingId: string) => {
+  try {
+    const bookingRef = doc(db, 'bookings', bookingId)
+    await updateDoc(bookingRef, {
+      reminderSent: true,
+      updatedAt: serverTimestamp()
+    })
+  } catch (error) {
+    console.error('Error marking reminder sent in repository:', error)
+    throw error
+  }
+}
+
+export const markBooking10MinReminderSent = async (bookingId: string) => {
+  try {
+    const bookingRef = doc(db, 'bookings', bookingId)
+    await updateDoc(bookingRef, {
+      reminder10Sent: true,
+      updatedAt: serverTimestamp()
+    })
+  } catch (error) {
+    console.error('Error marking 10-min reminder sent in repository:', error)
+    throw error
+  }
+}
+
+// ── WhatsApp triggers helper ──
+export const triggerWhatsAppForBooking = async (
+  bookingId: string,
+  eventType: 'booking' | 'acceptance' | 'rejection' | 'reschedule' | 'cancellation' | 'reminder' | 'reminder10'
+) => {
+  try {
+    const bookingSnap = await getDoc(doc(db, 'bookings', bookingId))
+    if (!bookingSnap.exists()) return
+
+    const booking = bookingSnap.data()
+    const userId = booking.userId
+    const guideId = booking.guideId
+
+    const userSnap = await getDoc(doc(db, 'users', userId))
+    const guideSnap = await getDoc(doc(db, 'users', guideId))
+
+    if (!userSnap.exists() || !guideSnap.exists()) return
+
+    const userData = userSnap.data()
+    const guideData = guideSnap.data()
+
+    const studentName = userData.displayName || userData.fullName || 'Student'
+    const studentPhone = userData.phone || userData.phoneNumber || ''
+
+    const mentorName = guideData.displayName || guideData.fullName || 'Mentor'
+    const mentorPhone = guideData.phone || guideData.phoneNumber || ''
+
+    const sessionLink = window.location.origin + '/dashboard'
+    const mentorPortalLink = window.location.origin + '/mentor-portal'
+
+    const templateData = {
+      recipientId: userId,
+      recipientPhone: studentPhone,
+      recipientName: studentName,
+      studentName,
+      mentorName,
+      date: booking.sessionDate || '',
+      time: booking.sessionTime || '',
+      duration: booking.sessionDuration || 45,
+      sessionLink,
+      sessionId: booking.sessionId || bookingId
+    }
+
+    const mentorTemplateData = {
+      recipientId: guideId,
+      recipientPhone: mentorPhone,
+      recipientName: mentorName,
+      studentName,
+      mentorName,
+      date: booking.sessionDate || '',
+      time: booking.sessionTime || '',
+      duration: booking.sessionDuration || 45,
+      sessionLink: mentorPortalLink,
+      sessionId: booking.sessionId || bookingId
+    }
+
+    if (eventType === 'booking') {
+      if (studentPhone) {
+        sendWhatsAppNotification('booking', templateData)
+      }
+      if (mentorPhone) {
+        sendWhatsAppNotification('booking', {
+          ...mentorTemplateData,
+          recipientName: mentorName
+        })
+      }
+    } else if (eventType === 'acceptance') {
+      if (studentPhone) {
+        sendWhatsAppNotification('acceptance', templateData)
+      }
+    } else if (eventType === 'rejection') {
+      if (studentPhone) {
+        sendWhatsAppNotification('rejection', templateData)
+      }
+    } else if (eventType === 'reschedule') {
+      if (studentPhone) {
+        sendWhatsAppNotification('reschedule', templateData)
+      }
+      if (mentorPhone) {
+        sendWhatsAppNotification('reschedule', {
+          ...mentorTemplateData,
+          recipientName: mentorName
+        })
+      }
+    } else if (eventType === 'cancellation') {
+      if (studentPhone) {
+        sendWhatsAppNotification('cancellation', templateData)
+      }
+      if (mentorPhone) {
+        sendWhatsAppNotification('cancellation', {
+          ...mentorTemplateData,
+          recipientName: mentorName
+        })
+      }
+    } else if (eventType === 'reminder') {
+      if (studentPhone) {
+        sendWhatsAppNotification('reminder', templateData)
+      }
+      if (mentorPhone) {
+        sendWhatsAppNotification('reminder', {
+          ...mentorTemplateData,
+          recipientName: mentorName
+        })
+      }
+    } else if (eventType === 'reminder10') {
+      if (studentPhone) {
+        sendWhatsAppNotification('reminder10', templateData)
+      }
+      if (mentorPhone) {
+        sendWhatsAppNotification('reminder10', {
+          ...mentorTemplateData,
+          recipientName: mentorName
+        })
+      }
+    }
+  } catch (error) {
+    console.error('Failed to trigger WhatsApp notification:', error)
+  }
+}
+
+
+// ── Reschedule Booking transaction operation ──
+export const rescheduleBooking = async (bookingId: string, newSlotId: string, requesterUid: string) => {
+  try {
+    const result = await runTransaction(db, async (transaction) => {
+      const bookingRef = doc(db, 'bookings', bookingId)
+      const bookingDoc = await transaction.get(bookingRef)
+      if (!bookingDoc.exists()) {
+        throw new Error('Booking not found')
+      }
+      const bookingData = bookingDoc.data()
+
+      // Enforce ownership: only the user who booked the session can reschedule it
+      if (bookingData.userId !== requesterUid) {
+        throw new Error('Unauthorized: Only the booking owner can reschedule this booking')
+      }
+      if (bookingData.status !== 'confirmed') {
+        throw new Error('Only accepted/confirmed sessions can be rescheduled')
+      }
+
+      const now = new Date()
+      const sessionStart = new Date(`${bookingData.sessionDate}T${bookingData.sessionTime}`)
+      if (sessionStart.getTime() <= now.getTime()) {
+        throw new Error('Past or ongoing sessions cannot be rescheduled')
+      }
+
+      const oldSlotId = bookingData.slotId
+      const oldSlotRef = doc(db, 'guide_slots', oldSlotId)
+      const newSlotRef = doc(db, 'guide_slots', newSlotId)
+
+      const newSlotDoc = await transaction.get(newSlotRef)
+      if (!newSlotDoc.exists()) {
+        throw new Error('New slot not found')
+      }
+      const newSlotData = newSlotDoc.data()
+      if (newSlotData.isBooked) {
+        throw new Error('The selected slot has already been booked')
+      }
+      if (newSlotData.isBlocked || newSlotData.isActive === false) {
+        throw new Error('The selected slot is unavailable')
+      }
+      if (newSlotData.guideId !== bookingData.guideId) {
+        throw new Error('Must select a slot from the same mentor')
+      }
+
+      // 1. Release old slot
+      transaction.update(oldSlotRef, {
+        isBooked: false,
+        bookingId: null,
+        bookedBy: null,
+        updatedAt: serverTimestamp()
+      })
+
+      // 2. Book new slot
+      transaction.update(newSlotRef, {
+        isBooked: true,
+        bookingId: bookingId,
+        bookedBy: bookingData.userId,
+        updatedAt: serverTimestamp()
+      })
+
+      // 3. Update booking details
+      transaction.update(bookingRef, {
+        slotId: newSlotId,
+        sessionDate: newSlotData.date,
+        sessionTime: newSlotData.time,
+        rescheduled: true,
+        rescheduleCount: (bookingData.rescheduleCount || 0) + 1,
+        reminderSent: false,
+        reminder10Sent: false,
+        updatedAt: serverTimestamp()
+      })
+
+      // 4. Update session document if present
+      if (bookingData.sessionId) {
+        const sessionRef = doc(db, 'sessions', bookingData.sessionId)
+        transaction.update(sessionRef, {
+          sessionDate: newSlotData.date,
+          sessionTime: newSlotData.time,
+          scheduledAt: `${newSlotData.date}T${newSlotData.time}:00`,
+          rescheduled: true,
+          updatedAt: serverTimestamp()
+        })
+      }
+
+      // 5. In-app notifications
+      // Seeker Notif
+      const seekerNotifRef = doc(collection(db, 'notifications'))
+      transaction.set(seekerNotifRef, {
+        userId: bookingData.userId,
+        type: 'booking_rescheduled',
+        title: 'Session Rescheduled!',
+        body: `Your session with the mentor has been rescheduled to ${newSlotData.date} at ${newSlotData.time}.`,
+        read: false,
+        actionUrl: '/dashboard',
+        createdAt: serverTimestamp()
+      })
+
+      // Mentor Notif
+      const mentorNotifRef = doc(collection(db, 'notifications'))
+      transaction.set(mentorNotifRef, {
+        userId: bookingData.guideId,
+        type: 'booking_rescheduled',
+        title: 'Session Rescheduled',
+        body: `A session has been rescheduled to ${newSlotData.date} at ${newSlotData.time}.`,
+        read: false,
+        actionUrl: '/mentor-portal',
+        createdAt: serverTimestamp()
+      })
+
+      // Create Audit Log
+      const auditRef = doc(collection(db, 'reschedule_logs'))
+      transaction.set(auditRef, {
+        bookingId,
+        userId: bookingData.userId,
+        guideId: bookingData.guideId,
+        oldSlotId,
+        oldDate: bookingData.sessionDate,
+        oldTime: bookingData.sessionTime,
+        newSlotId,
+        newDate: newSlotData.date,
+        newTime: newSlotData.time,
+        rescheduledBy: 'student',
+        createdAt: serverTimestamp()
+      })
+
+      return {
+        bookingId,
+        newDate: newSlotData.date,
+        newTime: newSlotData.time
+      }
+    })
+
+    // 6. Asynchronously trigger WhatsApp notifications (does not block)
+    triggerWhatsAppForBooking(result.bookingId, 'reschedule')
+
+    return result
+  } catch (error) {
+    console.error('Rescheduling failed:', error)
+    throw error
+  }
+}
+

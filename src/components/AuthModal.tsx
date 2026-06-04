@@ -14,7 +14,7 @@ export default function AuthModal() {
   const [password, setPassword] = useState('')
   const [name, setName] = useState('')
   const [phone, setPhone] = useState('')
-  const [role, setRole] = useState<'user' | 'mentor'>('user')
+  const [role, setRole] = useState<'seeker' | 'mentor'>('seeker')
   const [showPass, setShowPass] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -167,9 +167,9 @@ export default function AuthModal() {
           <div className="role-selector">
             <button
               type="button"
-              className={`role-btn ${role === 'user' ? 'role-btn--active' : ''}`}
+              className={`role-btn ${role === 'seeker' ? 'role-btn--active' : ''}`}
               id="modal-role-user"
-              onClick={() => setRole('user')}
+              onClick={() => setRole('seeker')}
             >
               <span className="role-btn__icon">🙋</span>
               <div>
@@ -196,10 +196,12 @@ export default function AuthModal() {
               <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google" width="18" />
               Continue with Google
             </button>
-            <button className="auth-social-btn" id="modal-anonymous-login" type="button" onClick={handleAnonymousLogin} disabled={loading} style={{ background: 'var(--clr-bg-card)', borderColor: 'var(--clr-border-strong)' }}>
-              <span style={{ fontSize: '1.1rem' }}>🎭</span>
-              Continue Anonymously
-            </button>
+            {role === 'seeker' && (
+              <button className="auth-social-btn" id="modal-anonymous-login" type="button" onClick={handleAnonymousLogin} disabled={loading} style={{ background: 'var(--clr-bg-card)', borderColor: 'var(--clr-border-strong)' }}>
+                <span style={{ fontSize: '1.1rem' }}>🎭</span>
+                Continue Anonymously
+              </button>
+            )}
           </div>
 
           <div className="auth-divider">

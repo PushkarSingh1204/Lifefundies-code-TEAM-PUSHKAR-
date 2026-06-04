@@ -20,6 +20,8 @@ export default function OnboardingPage() {
     isAnonymous: false,
     sessionPreference: 'one-on-one' as string,
     selectedWelcomeOption: '' as string,
+    whatsappNotificationsEnabled: true,
+    phoneNumber: '',
   })
   const { user, setUser } = useAuthStore()
   const navigate = useNavigate()
@@ -35,6 +37,8 @@ export default function OnboardingPage() {
         isAnonymous: user.isAnonymous || false,
         sessionPreference: (user as any).sessionPreference || 'one-on-one',
         selectedWelcomeOption: (user as any).selectedWelcomeOption || '',
+        whatsappNotificationsEnabled: (user as any).whatsappNotificationsEnabled !== false,
+        phoneNumber: (user as any).phoneNumber || user.phone || (user as any).phone || '',
       })
       if (user.onboardingComplete) {
         navigate('/dashboard', { replace: true })
@@ -80,11 +84,19 @@ export default function OnboardingPage() {
 
   const handleFinish = async () => {
     if (user) {
-      const updatedUser = { ...user, ...data, onboardingComplete: true }
+      const updatedUser = { 
+        ...user, 
+        ...data, 
+        phone: data.phoneNumber || (user as any).phone || (user as any).phoneNumber || '',
+        phoneNumber: data.phoneNumber || (user as any).phone || (user as any).phoneNumber || '',
+        onboardingComplete: true 
+      }
       
       try {
         await updateDoc(doc(db, 'users', user.uid), {
           ...data,
+          phone: data.phoneNumber || (user as any).phone || (user as any).phoneNumber || '',
+          phoneNumber: data.phoneNumber || (user as any).phone || (user as any).phoneNumber || '',
           onboardingComplete: true
         })
         setUser(updatedUser)
@@ -363,7 +375,7 @@ function ChallengeStep({
   )
 }
 
-function PrefsStep({ data, update }: { data: { sessionPreference: string; isAnonymous: boolean }; update: (f: string, v: unknown) => void }) {
+function PrefsStep({ data, update }: { data: { sessionPreference: string; isAnonymous: boolean; whatsappNotificationsEnabled: boolean; phoneNumber: string }; update: (f: string, v: unknown) => void }) {
   const sessionTypes = [
     { id: 'one-on-one', icon: '👤', label: '1-on-1 Session', desc: 'Private session with a dedicated mentor' },
     { id: 'peer', icon: '👥', label: 'Peer Support', desc: 'Connect with someone who has been through similar experiences' },
@@ -396,7 +408,48 @@ function PrefsStep({ data, update }: { data: { sessionPreference: string; isAnon
         </div>
       </div>
 
-      <div className="ob-final-toggle">
+      <div className="form-group" style={{ marginTop: 'var(--sp-6)', borderTop: '1px solid var(--clr-border)', paddingTop: 'var(--sp-4)' }}>
+        <label className="form-label">WhatsApp Notifications</label>
+        <p className="body-sm text-muted" style={{ marginBottom: 'var(--sp-3)' }}>Would you like to receive session confirmations, reminders, and updates on WhatsApp?</p>
+        <div className="flex gap-4" style={{ marginTop: 'var(--sp-2)' }}>
+          <label className="flex items-center gap-2 body-sm cursor-pointer" style={{ color: 'var(--clr-text)', fontWeight: 500 }}>
+            <input
+              type="radio"
+              name="whatsappNotificationsEnabled"
+              checked={data.whatsappNotificationsEnabled === true}
+              onChange={() => update('whatsappNotificationsEnabled', true)}
+              style={{ accentColor: 'var(--clr-primary)' }}
+            />
+            Yes, enable WhatsApp updates
+          </label>
+          <label className="flex items-center gap-2 body-sm cursor-pointer" style={{ color: 'var(--clr-text)', fontWeight: 500 }}>
+            <input
+              type="radio"
+              name="whatsappNotificationsEnabled"
+              checked={data.whatsappNotificationsEnabled === false}
+              onChange={() => update('whatsappNotificationsEnabled', false)}
+              style={{ accentColor: 'var(--clr-primary)' }}
+            />
+            No, use app notifications only
+          </label>
+        </div>
+
+        {data.whatsappNotificationsEnabled && (
+          <div className="form-group animate-fadeIn" style={{ marginTop: 'var(--sp-4)' }}>
+            <label className="form-label">WhatsApp Phone Number</label>
+            <input
+              type="tel"
+              className="form-input"
+              placeholder="e.g. 8920463196"
+              value={data.phoneNumber}
+              onChange={e => update('phoneNumber', e.target.value)}
+              required={data.whatsappNotificationsEnabled}
+            />
+          </div>
+        )}
+      </div>
+
+      <div className="ob-final-toggle" style={{ marginTop: 'var(--sp-6)' }}>
         <div>
           <p className="font-medium">Keep my profile anonymous by default</p>
           <p className="body-sm text-muted">Your name and photo will be hidden from mentors until you choose to reveal</p>

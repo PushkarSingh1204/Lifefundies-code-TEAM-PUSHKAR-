@@ -1,6 +1,6 @@
 // TypeScript Types & Interfaces for LifeFundies
 
-export type UserRole = 'user' | 'mentor' | 'admin'
+export type UserRole = 'seeker' | 'user' | 'mentor' | 'admin'
 
 export type SessionStatus = 'payment_pending' | 'pending' | 'confirmed' | 'completed' | 'cancelled'
 
@@ -82,6 +82,16 @@ export interface User {
   ageGroup?: string
   mentorInterests?: string[]
   onboardingStep?: number
+  onboardingCompleted?: boolean
+  mentorOnboardingComplete?: boolean
+  qualification?: string
+  experience?: number
+  yearsOfExperience?: number
+  languages?: string[]
+  languagesKnown?: string[]
+  expertise?: string[]
+  expertiseDomains?: string[]
+  categories?: string[]
 }
 
 export interface Mentor {

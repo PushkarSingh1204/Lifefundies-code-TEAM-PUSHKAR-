@@ -161,7 +161,7 @@ export default function AdminPage() {
                           <p className="body-sm text-muted">{user.email}</p>
                         </div>
                       </div>
-                      <span className={`badge ${user.role === 'user' ? 'badge-secondary' : 'badge-primary'}`}>{user.role}</span>
+                      <span className={`badge ${user.role === 'seeker' || user.role === 'user' ? 'badge-secondary' : 'badge-primary'}`}>{user.role}</span>
                       <span className="body-sm">{user.sessions}</span>
                       <span className="body-sm text-muted">{user.joinDate}</span>
                       <span className={`badge ${user.status === 'active' ? 'badge-primary' : 'badge-secondary'}`}>{user.status}</span>

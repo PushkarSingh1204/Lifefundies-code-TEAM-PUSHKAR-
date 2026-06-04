@@ -1,8 +1,15 @@
 import { useState, useEffect } from 'react'
 import { Link, Navigate, useNavigate } from 'react-router-dom'
 import { Calendar, Clock, Star, TrendingUp, Users, ArrowRight, Bell, BookOpen, Heart, X } from 'lucide-react'
-import { getUserBookings } from '../../lib/bookingRepository'
+import { 
+  subscribeToUserBookings, 
+  markBookingReminderSent, 
+  markBooking10MinReminderSent, 
+  rescheduleBooking, 
+  triggerWhatsAppForBooking 
+} from '../../lib/bookingRepository'
 import { markNotificationAsRead, markAllNotificationsAsRead } from '../../lib/notificationRepository'
+import SlotSelection from '../../components/SlotSelection'
 import { getUserPosts } from '../../lib/communityRepository'
 import { subscribeToMentors } from '../../lib/userRepository'
 import { useAuthStore, useAppStore } from '../../stores'
@@ -27,6 +34,11 @@ export default function DashboardPage() {
   const [loadingBookings, setLoadingBookings] = useState(false)
   const [userPostsCount, setUserPostsCount] = useState(0)
   const [recommendedMentors, setRecommendedMentors] = useState<any[]>(MOCK_MENTORS.slice(0, 3))
+  const [historyTab, setHistoryTab] = useState<'completed' | 'cancelled'>('completed')
+  const [reschedulingSession, setReschedulingSession] = useState<any | null>(null)
+  const [selectedRescheduleSlot, setSelectedRescheduleSlot] = useState<any | null>(null)
+  const [rescheduleLoading, setRescheduleLoading] = useState(false)
+  const [rescheduleError, setRescheduleError] = useState('')
 
   const { 
     notificationsList, 
@@ -36,20 +48,86 @@ export default function DashboardPage() {
 
 
 
-  // Bookings fetch (refresh-based, only loads when screen is refreshed)
+  // Bookings fetch (real-time listener)
   useEffect(() => {
     if (!user?.uid) return
 
     setLoadingBookings(true)
-    getUserBookings(user.uid)
-      .then((data: any) => {
-        if (Array.isArray(data)) {
-          setBookings(data)
+    const unsubscribe = subscribeToUserBookings(user.uid, (data: any) => {
+      if (Array.isArray(data)) {
+        setBookings(data)
+      }
+      setLoadingBookings(false)
+    })
+
+    return () => unsubscribe()
+  }, [user?.uid])
+
+  // Automated background pre-session WhatsApp reminder check
+  useEffect(() => {
+    if (!bookings || bookings.length === 0) return
+
+    const checkReminders = () => {
+      const now = Date.now()
+      bookings.forEach(async (booking) => {
+        if (booking.status !== 'confirmed') return
+
+        // Calculate time to session in minutes
+        if (!booking.sessionDate || !booking.sessionTime) return
+        const sessionDateTime = new Date(`${booking.sessionDate}T${booking.sessionTime}`)
+        const diffMs = sessionDateTime.getTime() - now
+        const mToSession = diffMs / (1000 * 60)
+
+        // 1. Trigger 30-min reminder if session starts in <= 30 minutes, is > 10 minutes, and reminderSent is not true
+        if (mToSession <= 30 && mToSession > 10 && booking.reminderSent !== true) {
+          console.log(`[Dashboard Automated Reminder] Triggering 30-min WhatsApp reminder for booking: ${booking.id}`)
+          try {
+            // Immediately mark as sent locally and in db to prevent double triggers
+            await markBookingReminderSent(booking.id)
+            // Trigger notifications
+            triggerWhatsAppForBooking(booking.id, 'reminder')
+          } catch (err) {
+            console.error('Failed to trigger automated 30-min WhatsApp reminder:', err)
+          }
+        }
+
+        // 2. Trigger 10-min reminder if session starts in <= 10 minutes, is >= -5 minutes, and reminder10Sent is not true
+        if (mToSession <= 10 && mToSession >= -5 && booking.reminder10Sent !== true) {
+          console.log(`[Dashboard Automated Reminder] Triggering 10-min WhatsApp reminder for booking: ${booking.id}`)
+          try {
+            // Immediately mark as sent locally and in db to prevent double triggers
+            await markBooking10MinReminderSent(booking.id)
+            // Trigger notifications
+            triggerWhatsAppForBooking(booking.id, 'reminder10')
+          } catch (err) {
+            console.error('Failed to trigger automated 10-min WhatsApp reminder:', err)
+          }
         }
       })
-      .catch((err) => console.error(err))
-      .finally(() => setLoadingBookings(false))
-  }, [user?.uid])
+    }
+
+    // Run check immediately, then schedule every 30 seconds
+    checkReminders()
+    const interval = setInterval(checkReminders, 30000)
+    return () => clearInterval(interval)
+  }, [bookings])
+
+
+  const handleConfirmReschedule = async () => {
+    if (!reschedulingSession || !selectedRescheduleSlot || !user?.uid) return
+    setRescheduleLoading(true)
+    setRescheduleError('')
+    try {
+      await rescheduleBooking(reschedulingSession.id, selectedRescheduleSlot.id, user.uid)
+      setReschedulingSession(null)
+      setSelectedRescheduleSlot(null)
+    } catch (err: any) {
+      console.error(err)
+      setRescheduleError(err.message || 'Rescheduling failed. Please try again.')
+    } finally {
+      setRescheduleLoading(false)
+    }
+  }
 
   // Community posts count fetch
   useEffect(() => {
@@ -124,6 +202,36 @@ export default function DashboardPage() {
     return `${y}-${m}-${d}`;
   })();
 
+  const getMinutesToSession = (sessionDate: string, sessionTime: string) => {
+    if (!sessionDate || !sessionTime) return Infinity;
+    const sessionDateTime = new Date(`${sessionDate}T${sessionTime}`);
+    const diffMs = sessionDateTime.getTime() - Date.now();
+    return diffMs / (1000 * 60);
+  };
+
+  const handleSendReminder = async (booking: any) => {
+    const mentorName = booking.mentor || 'Mentor';
+    const phone = booking.mentorPhone;
+    if (!phone) {
+      alert('Mentor phone number is not available to send WhatsApp reminder.');
+      return;
+    }
+    const sessionLink = window.location.origin + '/dashboard';
+    const text = `Hi ${mentorName}, this is a reminder that my session with you starts in 30 minutes. Join here: ${sessionLink}`;
+    
+    let formattedPhone = phone.trim();
+    if (formattedPhone.length === 10) {
+      formattedPhone = '91' + formattedPhone;
+    }
+
+    try {
+      await markBookingReminderSent(booking.id);
+      window.open(`https://api.whatsapp.com/send?phone=${formattedPhone}&text=${encodeURIComponent(text)}`, '_blank');
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
   // Filter bookings to upcoming sessions format: confirmed or pending, AND date >= current date
   const upcomingSessions = bookings
     .filter(b => {
@@ -143,6 +251,48 @@ export default function DashboardPage() {
         time: b.sessionTime,
         duration: b.sessionDuration || 60,
         status: b.status,
+        mentorPhone: b.mentorPhone || '',
+        reminderSent: b.reminderSent === true,
+        reminder10Sent: b.reminder10Sent === true,
+        guideId: b.guideId,
+        category: b.category,
+        price: b.price || b.finalAmount || 0,
+      }
+    })
+
+  const completedSessions = bookings
+    .filter(b => b.status === 'completed')
+    .map(b => {
+      const mentor = MOCK_MENTORS.find(m => m.uid === b.guideId)
+      return {
+        id: b.id || b.bookingId,
+        mentor: b.mentorName || mentor?.displayName || 'LifeFundies Mentor',
+        mentorPhotoURL: b.mentorPhotoURL || mentor?.photoURL || '',
+        category: b.category || 'peer-buddy',
+        domain: b.domain,
+        date: b.sessionDate,
+        time: b.sessionTime,
+        duration: b.sessionDuration || 60,
+        status: b.status,
+        userNotes: b.userNotes || '',
+      }
+    })
+
+  const cancelledSessions = bookings
+    .filter(b => b.status === 'cancelled')
+    .map(b => {
+      const mentor = MOCK_MENTORS.find(m => m.uid === b.guideId)
+      return {
+        id: b.id || b.bookingId,
+        mentor: b.mentorName || mentor?.displayName || 'LifeFundies Mentor',
+        mentorPhotoURL: b.mentorPhotoURL || mentor?.photoURL || '',
+        category: b.category || 'peer-buddy',
+        domain: b.domain,
+        date: b.sessionDate,
+        time: b.sessionTime,
+        duration: b.sessionDuration || 60,
+        status: b.status,
+        userNotes: b.userNotes || '',
       }
     })
 
@@ -319,6 +469,7 @@ export default function DashboardPage() {
                   <div className="flex-col gap-3">
                     {upcomingSessions.map(session => {
                       const isJoinable = session.status === 'confirmed' && !!session.sessionId;
+                      const mToSession = getMinutesToSession(session.date, session.time);
                       return (
                         <div key={session.id} className="session-card" id={`session-${session.id}`}>
                           <div className="avatar avatar-md" style={{ overflow: 'hidden', border: '1px solid var(--clr-border)' }}>
@@ -340,6 +491,14 @@ export default function DashboardPage() {
                             <span className={`badge ${session.status === 'confirmed' ? 'badge-primary' : 'badge-secondary'}`}>
                               {session.status}
                             </span>
+                            {mToSession <= 30 && mToSession >= -60 && !session.reminderSent && (
+                              <button
+                                className="btn btn-accent btn-sm"
+                                onClick={() => handleSendReminder(session)}
+                              >
+                                WhatsApp
+                              </button>
+                            )}
                             <button 
                               className="btn btn-outline btn-sm"
                               onClick={() => handleJoinSession(session.mentor, session.sessionId || session.id)}
@@ -347,6 +506,18 @@ export default function DashboardPage() {
                             >
                               Join
                             </button>
+                            {session.status === 'confirmed' && mToSession > 0 && (
+                              <button 
+                                className="btn btn-outline btn-sm"
+                                onClick={() => {
+                                  setReschedulingSession(session)
+                                  setSelectedRescheduleSlot(null)
+                                  setRescheduleError('')
+                                }}
+                              >
+                                Reschedule
+                              </button>
+                            )}
                           </div>
                         </div>
                       )
@@ -361,6 +532,114 @@ export default function DashboardPage() {
                     </p>
                     <Link to="/mentors" className="btn btn-primary btn-sm">Book a Session</Link>
                   </div>
+                )}
+              </div>
+
+              {/* Session History */}
+              <div className="dashboard__section animate-fadeInUp delay-250">
+                <div className="flex-between" style={{ marginBottom: 'var(--sp-4)' }}>
+                  <h2 className="heading-2">Session History</h2>
+                  <div className="flex gap-2" style={{ background: 'var(--clr-bg-alt)', padding: '4px', borderRadius: 'var(--radius-md)' }}>
+                    <button 
+                      type="button"
+                      className={`btn btn-sm ${historyTab === 'completed' ? 'btn-primary' : 'btn-ghost'}`}
+                      onClick={() => setHistoryTab('completed')}
+                      style={{ padding: '0.25rem 0.75rem', fontSize: '0.75rem', height: '28px' }}
+                    >
+                      Completed ({completedSessions.length})
+                    </button>
+                    <button 
+                      type="button"
+                      className={`btn btn-sm ${historyTab === 'cancelled' ? 'btn-primary' : 'btn-ghost'}`}
+                      onClick={() => setHistoryTab('cancelled')}
+                      style={{ padding: '0.25rem 0.75rem', fontSize: '0.75rem', height: '28px' }}
+                    >
+                      Cancelled ({cancelledSessions.length})
+                    </button>
+                  </div>
+                </div>
+
+                {historyTab === 'completed' ? (
+                  completedSessions.length > 0 ? (
+                    <div className="flex-col gap-3">
+                      {completedSessions.map(session => (
+                        <div key={session.id} className="session-card" style={{ padding: '1rem' }}>
+                          <div className="avatar avatar-md" style={{ overflow: 'hidden', border: '1px solid var(--clr-border)' }}>
+                            {session.mentorPhotoURL ? (
+                              <img src={session.mentorPhotoURL} alt={session.mentor} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                            ) : (
+                              getInitials(session.mentor)
+                            )}
+                          </div>
+                          <div className="session-card__info" style={{ flex: 1 }}>
+                            <p className="session-card__mentor">
+                              {session.mentor}
+                              <span className="badge badge-secondary" style={{ marginLeft: 'var(--sp-2)', fontSize: '0.65rem', textTransform: 'capitalize', padding: '2px 6px' }}>
+                                {session.category.replace('-', ' ')}
+                              </span>
+                            </p>
+                            <div className="flex gap-3" style={{ marginTop: '2px' }}>
+                              <span className="body-sm text-muted flex gap-1"><Calendar size={13} /> {session.date}</span>
+                              <span className="body-sm text-muted flex gap-1"><Clock size={13} /> {session.duration}m</span>
+                              <span className="body-sm text-muted flex gap-1"><BookOpen size={13} /> {session.domain}</span>
+                            </div>
+                            {session.userNotes && session.userNotes !== 'Not specified' && (
+                              <p className="body-sm text-muted" style={{ marginTop: '6px', fontStyle: 'italic', fontSize: '0.75rem', paddingLeft: '8px', borderLeft: '2px solid var(--clr-border)' }}>
+                                "{session.userNotes}"
+                              </p>
+                            )}
+                          </div>
+                          <div className="session-card__actions">
+                            <span className="badge badge-secondary" style={{ padding: '4px 8px' }}>
+                              Completed
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="dashboard__empty" style={{ padding: '2rem 1rem' }}>
+                      <p className="body-sm text-muted">No completed sessions yet.</p>
+                    </div>
+                  )
+                ) : (
+                  cancelledSessions.length > 0 ? (
+                    <div className="flex-col gap-3">
+                      {cancelledSessions.map(session => (
+                        <div key={session.id} className="session-card" style={{ padding: '1rem', opacity: 0.85 }}>
+                          <div className="avatar avatar-md" style={{ overflow: 'hidden', border: '1px solid var(--clr-border)', filter: 'grayscale(100%)' }}>
+                            {session.mentorPhotoURL ? (
+                              <img src={session.mentorPhotoURL} alt={session.mentor} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                            ) : (
+                              getInitials(session.mentor)
+                            )}
+                          </div>
+                          <div className="session-card__info" style={{ flex: 1 }}>
+                            <p className="session-card__mentor" style={{ color: 'var(--clr-text-muted)' }}>
+                              {session.mentor}
+                              <span className="badge badge-outline" style={{ marginLeft: 'var(--sp-2)', fontSize: '0.65rem', textTransform: 'capitalize', padding: '2px 6px' }}>
+                                {session.category.replace('-', ' ')}
+                              </span>
+                            </p>
+                            <div className="flex gap-3" style={{ marginTop: '2px' }}>
+                              <span className="body-sm text-muted flex gap-1"><Calendar size={13} /> {session.date}</span>
+                              <span className="body-sm text-muted flex gap-1"><Clock size={13} /> {session.duration}m</span>
+                              <span className="body-sm text-muted flex gap-1"><BookOpen size={13} /> {session.domain}</span>
+                            </div>
+                          </div>
+                          <div className="session-card__actions">
+                            <span className="badge badge-accent" style={{ padding: '4px 8px' }}>
+                              Cancelled
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="dashboard__empty" style={{ padding: '2rem 1rem' }}>
+                      <p className="body-sm text-muted">No cancelled sessions.</p>
+                    </div>
+                  )
                 )}
               </div>
 
@@ -483,6 +762,62 @@ export default function DashboardPage() {
               guideName={sessionMentorName}
               onLeave={() => setActiveSessionId(null)}
             />
+          </div>
+        </div>
+      )}
+
+      {reschedulingSession && (
+        <div className="video-modal-overlay">
+          <div className="video-modal-card animate-fadeInUp" style={{ maxWidth: '600px', maxHeight: '90vh', overflowY: 'auto' }}>
+            <div className="video-modal-header">
+              <span className="video-modal-title">Reschedule Session</span>
+              <button 
+                type="button"
+                className="btn btn-ghost btn-sm video-modal-close-btn" 
+                onClick={() => setReschedulingSession(null)}
+                aria-label="Close reschedule modal"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <div style={{ padding: 'var(--sp-6)' }}>
+              {rescheduleError && (
+                <div className="booking-modal-error" style={{ marginBottom: 'var(--sp-4)', color: 'var(--clr-accent)', background: 'rgba(239, 68, 68, 0.1)', padding: 'var(--sp-3)', borderRadius: 'var(--radius-md)', fontSize: '0.875rem' }}>
+                  {rescheduleError}
+                </div>
+              )}
+              <p className="body-sm text-muted" style={{ marginBottom: 'var(--sp-4)' }}>
+                Rescheduling your session with <strong>{reschedulingSession.mentor}</strong>. You are currently scheduled for {reschedulingSession.date} at {reschedulingSession.time}.
+              </p>
+              
+              <SlotSelection
+                guideId={reschedulingSession.guideId}
+                guidePrice={reschedulingSession.price}
+                selectedCategory={reschedulingSession.category}
+                selectedDuration={reschedulingSession.duration}
+                onSlotSelect={(slot) => setSelectedRescheduleSlot(slot)}
+              />
+
+              <div className="flex gap-3" style={{ marginTop: 'var(--sp-6)', borderTop: '1px solid var(--clr-border)', paddingTop: 'var(--sp-4)' }}>
+                <button
+                  type="button"
+                  className="btn btn-outline"
+                  onClick={() => setReschedulingSession(null)}
+                  style={{ flex: 1 }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={handleConfirmReschedule}
+                  disabled={rescheduleLoading || !selectedRescheduleSlot}
+                  style={{ flex: 1 }}
+                >
+                  {rescheduleLoading ? 'Rescheduling...' : 'Confirm Reschedule'}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

@@ -3,8 +3,9 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import Navbar from './components/layout/Navbar'
 import Footer from './components/layout/Footer'
 import LandingPage from './pages/Landing/Landing'
-import { LoginPage, RegisterPage, ForgotPasswordPage } from './pages/Auth/Auth'
+import { LoginPage, RegisterPage, ForgotPasswordPage, MentorRegisterPage } from './pages/Auth/Auth'
 import OnboardingPage from './pages/Onboarding/Onboarding'
+import MentorOnboardingPage from './pages/MentorOnboarding/MentorOnboarding'
 import DashboardPage from './pages/Dashboard/Dashboard'
 import MentorsPage from './pages/Mentors/Mentors'
 import CommunityPage from './pages/Community/Community'
@@ -27,7 +28,21 @@ function ProtectedRoute({ children, requireRole }: { children: React.ReactNode; 
   
   if (loading) return <Preloader />
   if (!user) return <Navigate to="/login" replace />
-  if (requireRole && user.role !== requireRole && user.role !== 'admin') return <Navigate to="/dashboard" replace />
+  
+  // Prevent anonymous users from accessing routes that require a specific role (like 'mentor' or 'admin')
+  if (user.isAnonymous && requireRole) {
+    return <Navigate to="/dashboard" replace />
+  }
+  
+  if (requireRole && user.role !== requireRole && user.role !== 'admin') {
+    return <Navigate to="/dashboard" replace />
+  }
+
+  // Prevent mentors from accessing seeker pages (routes without a requireRole parameter)
+  if (!requireRole && user.role === 'mentor') {
+    return <Navigate to="/mentor-portal" replace />
+  }
+  
   return <>{children}</>
 }
 
@@ -111,6 +126,7 @@ export default function App() {
         {/* Auth */}
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<RegisterPage />} />
+        <Route path="/mentor-register" element={<MentorRegisterPage />} />
         <Route path="/forgot-password" element={<ForgotPasswordPage />} />
 
         {/* Protected — User */}
@@ -128,6 +144,9 @@ export default function App() {
         } />
 
         {/* Protected — Mentor */}
+        <Route path="/mentor-onboarding" element={
+          <ProtectedRoute requireRole="mentor"><MentorOnboardingPage /></ProtectedRoute>
+        } />
         <Route path="/mentor-portal" element={
           <ProtectedRoute requireRole="mentor"><AppLayout><MentorPortalPage /></AppLayout></ProtectedRoute>
         } />

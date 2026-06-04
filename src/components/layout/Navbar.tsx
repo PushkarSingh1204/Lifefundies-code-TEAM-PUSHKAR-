@@ -16,6 +16,16 @@ const NAV_LINKS = [
   { label: 'Contact Us', href: '/contact' },
 ]
 
+const MENTOR_NAV_LINKS = [
+  { label: 'Dashboard', href: '/mentor-portal?tab=overview' },
+  { label: 'Session Requests', href: '/mentor-portal?tab=requests' },
+  { label: 'Calendar', href: '/mentor-portal?tab=calendar' },
+  { label: 'Earnings', href: '/mentor-portal?tab=earnings' },
+  { label: 'Community', href: '/community' },
+  { label: 'Profile', href: '/mentor-portal?tab=profile' },
+  { label: 'Settings', href: '/settings' },
+]
+
 export default function Navbar() {
   const [menuOpen, setMenuOpen] = useState(false)
   const [scrolled, setScrolled] = useState(false)
@@ -26,6 +36,18 @@ export default function Navbar() {
   const unreadCount = notificationsList.filter(n => !n.isRead).length
   const location = useLocation()
   const navigate = useNavigate()
+
+  const isLinkActive = (href: string) => {
+    const [pathname, search] = href.split('?')
+    if (location.pathname !== pathname) return false
+    if (!search) return true
+    const urlParams = new URLSearchParams(location.search)
+    const linkParams = new URLSearchParams(search)
+    for (const [key, val] of linkParams.entries()) {
+      if (urlParams.get(key) !== val) return false
+    }
+    return true
+  }
 
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 20)
@@ -81,11 +103,11 @@ export default function Navbar() {
 
         {/* Desktop Nav */}
         <div className="navbar__links hide-mobile">
-          {NAV_LINKS.map(link => (
+          {(user?.role === 'mentor' ? MENTOR_NAV_LINKS : NAV_LINKS).map(link => (
             <Link
               key={link.href}
               to={link.href}
-              className={`navbar__link ${location.pathname === link.href ? 'navbar__link--active' : ''}`}
+              className={`navbar__link ${isLinkActive(link.href) ? 'navbar__link--active' : ''}`}
             >
               {link.label}
             </Link>
@@ -209,11 +231,12 @@ export default function Navbar() {
       {/* Mobile Menu */}
       {menuOpen && (
         <div className="navbar__mobile-menu">
-          {NAV_LINKS.map(link => (
+          {(user?.role === 'mentor' ? MENTOR_NAV_LINKS : NAV_LINKS).map(link => (
             <Link 
               key={link.href} 
               to={link.href} 
-              className="navbar__mobile-link"
+              className={`navbar__mobile-link ${isLinkActive(link.href) ? 'navbar__mobile-link--active' : ''}`}
+              style={isLinkActive(link.href) ? { color: 'var(--clr-primary)', fontWeight: '600', background: 'var(--clr-bg-alt)' } : undefined}
               onClick={() => setMenuOpen(false)}
             >
               {link.label}

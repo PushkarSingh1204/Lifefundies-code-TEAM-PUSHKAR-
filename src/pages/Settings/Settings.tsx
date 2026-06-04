@@ -22,9 +22,10 @@ export default function SettingsPage() {
     domains: user?.domains || [] as DomainId[],
     bio: (user as any)?.bio || '',
     photoURL: user?.photoURL || '',
-    emailNotif: true,
-    smsNotif: false,
-    browserNotif: true,
+    emailNotif: (user as any)?.emailNotif !== false,
+    smsNotif: (user as any)?.smsNotif === true,
+    browserNotif: (user as any)?.browserNotif !== false,
+    whatsappNotificationsEnabled: (user as any)?.whatsappNotificationsEnabled !== false,
   })
 
   if (!user) {
@@ -65,6 +66,11 @@ export default function SettingsPage() {
         domains: formData.domains,
         bio: formData.bio,
         photoURL: formData.photoURL,
+        emailNotif: formData.emailNotif,
+        smsNotif: formData.smsNotif,
+        browserNotif: formData.browserNotif,
+        whatsappNotificationsEnabled: formData.whatsappNotificationsEnabled,
+        phoneNumber: formData.phone || '',
       }
 
       await updateDoc(userRef, updateData)
@@ -304,7 +310,7 @@ export default function SettingsPage() {
                     <div className="settings-notif__options">
                       {[
                         { id: 'emailNotif', label: 'Email Notifications', desc: 'Receive booking updates and receipts', icon: Mail },
-                        { id: 'smsNotif', label: 'SMS & WhatsApp Alerts', desc: 'Receive urgent slot reminders 10 minutes before calls', icon: MessageSquare },
+                        { id: 'whatsappNotificationsEnabled', label: 'WhatsApp Alerts', desc: 'Receive session confirmations, reminders, and updates on WhatsApp', icon: MessageSquare },
                         { id: 'browserNotif', label: 'Browser Notifications', desc: 'Receive desktop and mobile notifications when active', icon: Bell },
                       ].map(opt => {
                         const val = (formData as any)[opt.id]

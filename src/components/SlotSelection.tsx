@@ -12,11 +12,14 @@ interface Slot {
   isBooked: boolean;
   isBlocked?: boolean;
   isActive?: boolean;
+  category?: string;
 }
 
 interface SlotSelectionProps {
   guideId: string;
   guidePrice: number;
+  selectedCategory?: string;
+  selectedDuration?: number;
   onSlotSelect: (slot: Slot) => void;
 }
 
@@ -24,7 +27,13 @@ interface SlotSelectionProps {
  * 📅 Slot Selection Component (TypeScript)
  * Displays and groups available slots for a guide from Firestore
  */
-export default function SlotSelection({ guideId, guidePrice, onSlotSelect }: SlotSelectionProps) {
+export default function SlotSelection({ 
+  guideId, 
+  guidePrice, 
+  selectedCategory, 
+  selectedDuration, 
+  onSlotSelect 
+}: SlotSelectionProps) {
   const [slots, setSlots] = useState<Record<string, Slot[]>>({});
   const [loading, setLoading] = useState(true);
   const [selectedSlot, setSelectedSlot] = useState<Slot | null>(null);
@@ -40,9 +49,20 @@ export default function SlotSelection({ guideId, guidePrice, onSlotSelect }: Slo
         
         const availableSlots: Slot[] = await getGuideSlots(guideId, today, nextWeek);
         
+        // Filter slots based on selected Category and Duration
+        const filteredSlots = availableSlots.filter(slot => {
+          if (selectedCategory && slot.category && slot.category !== selectedCategory) {
+            return false;
+          }
+          if (selectedDuration && slot.duration && Number(slot.duration) !== Number(selectedDuration)) {
+            return false;
+          }
+          return true;
+        });
+
         // Group by date
         const groupedSlots: Record<string, Slot[]> = {};
-        availableSlots.forEach(slot => {
+        filteredSlots.forEach(slot => {
           if (!groupedSlots[slot.date]) {
             groupedSlots[slot.date] = [];
           }
@@ -58,7 +78,8 @@ export default function SlotSelection({ guideId, guidePrice, onSlotSelect }: Slo
     };
 
     loadSlots();
-  }, [guideId]);
+  }, [guideId, selectedCategory, selectedDuration]);
+
 
   const handleSlotClick = (slot: Slot) => {
     setSelectedSlot(slot);

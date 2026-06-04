@@ -3,38 +3,72 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Allow any authenticated user (email / google / anonymous)
+    // Users (Seekers & Mentors)
     match /users/{userId} {
-      allow read, write: if request.auth != null
-                         && request.auth.uid == userId;
+      allow read: if request.auth != null && (
+        request.auth.uid == userId || 
+        resource.data.role == 'mentor' || 
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'mentor'
+      );
+      allow create: if request.auth != null && request.auth.uid == userId 
+                    && (request.resource.data.role != 'mentor' || request.auth.token.firebase.sign_in_provider != 'anonymous');
+      allow update: if request.auth != null && request.auth.uid == userId 
+                    && (request.resource.data.role == resource.data.role || request.auth.token.firebase.sign_in_provider != 'anonymous');
     }
 
-    // Guides - Public read, admin write (for now, allow all for testing)
+    // Guides - Public read, owner or admin write (for compatibility)
     match /guides/{guideId} {
-      allow read: if true; // Anyone can read guides
-      allow write: if true; // TODO: Restrict to admin only in production
+      allow read: if true;
+      allow write: if request.auth != null && (
+        request.auth.uid == guideId ||
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
+      );
       
       // Slots sub-collection
       match /slots/{slotId} {
-        allow read: if true; // Anyone can see available slots
-        allow write: if true; // TODO: Restrict to admin/guide only in production
+        allow read: if true;
+        allow write: if request.auth != null && (
+          request.auth.uid == guideId ||
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
+        );
       }
     }
 
     // Top-level guide_slots collection
     match /guide_slots/{slotId} {
       allow read: if true; // Anyone can see available slots
-      allow write: if true; // TODO: Restrict in production
+      
+      // Create: Only authenticated non-anonymous guides can create slots for themselves
+      allow create: if request.auth != null 
+                    && request.auth.token.firebase.sign_in_provider != 'anonymous'
+                    && request.resource.data.guideId == request.auth.uid;
+                    
+      // Update: Mentor owns the slot, or seeker books/releases it
+      allow update: if request.auth != null && (
+        resource.data.guideId == request.auth.uid ||
+        (
+          (request.resource.data.isBooked == true && request.resource.data.bookedBy == request.auth.uid) ||
+          (resource.data.bookedBy == request.auth.uid && request.resource.data.isBooked == false) ||
+          (resource.data.guideId == request.auth.uid)
+        )
+      );
+      
+      // Delete: Only slot owner can delete their slots if they are not booked
+      allow delete: if request.auth != null 
+                    && resource.data.guideId == request.auth.uid 
+                    && resource.data.isBooked == false;
     }
 
-    // Bookings - User can read their own, write to create
+    // Bookings - User can read/write their own
     match /bookings/{bookingId} {
       allow read: if request.auth != null && 
                   (request.auth.uid == resource.data.userId || 
                    request.auth.uid == resource.data.guideId);
       allow create: if request.auth != null && 
                     request.auth.uid == request.resource.data.userId;
-      allow update: if request.auth != null;
+      allow update: if request.auth != null && 
+                    (request.auth.uid == resource.data.userId || 
+                     request.auth.uid == resource.data.guideId);
     }
 
     // Sessions - User and guide can read/write their sessions
@@ -42,12 +76,18 @@ service cloud.firestore {
       allow read: if request.auth != null &&
                   (request.auth.uid == resource.data.userId || 
                    request.auth.uid == resource.data.guideId);
-      allow write: if request.auth != null;
+      allow create: if request.auth != null && 
+                    (request.auth.uid == request.resource.data.userId || 
+                     request.auth.uid == request.resource.data.guideId);
+      allow update, delete: if request.auth != null && 
+                            (request.auth.uid == resource.data.userId || 
+                             request.auth.uid == resource.data.guideId);
       
-      // Messages sub-collection
+      // Messages sub-collection - restricted to session participants
       match /messages/{messageId} {
-        allow read: if request.auth != null;
-        allow create: if request.auth != null;
+        allow read, create: if request.auth != null && 
+                            (request.auth.uid == get(/databases/$(database)/documents/sessions/$(sessionId)).data.userId || 
+                             request.auth.uid == get(/databases/$(database)/documents/sessions/$(sessionId)).data.guideId);
       }
     }
 
@@ -55,26 +95,27 @@ service cloud.firestore {
     match /payments/{paymentId} {
       allow read: if request.auth != null && 
                   request.auth.uid == resource.data.userId;
-      allow create: if request.auth != null;
+      allow create: if request.auth != null && 
+                    request.auth.uid == request.resource.data.userId;
     }
 
-    // Notifications - User can read their own
+    // Notifications - User can read/write their own
     match /notifications/{notificationId} {
       allow read: if request.auth != null && 
                   request.auth.uid == resource.data.userId;
-      allow create: if true; // System can create notifications
+      allow create: if request.auth != null; // System/Clients can create notifications
       allow update: if request.auth != null &&
                     request.auth.uid == resource.data.userId &&
                     request.resource.data.userId == resource.data.userId;
     }
 
-    // Community forum - public read, authenticated write.
-    // Authenticated includes Firebase anonymous users.
+    // Community forum - public read, authenticated author write
     match /community_posts/{postId} {
       allow read: if true;
       allow create: if request.auth != null
                     && request.resource.data.authorId == request.auth.uid;
-      allow update: if request.auth != null;
+      allow update: if request.auth != null 
+                    && resource.data.authorId == request.auth.uid;
       allow delete: if request.auth != null
                     && resource.data.authorId == request.auth.uid;
     }
@@ -83,12 +124,13 @@ service cloud.firestore {
       allow read: if true;
       allow create: if request.auth != null
                     && request.resource.data.authorId == request.auth.uid;
-      allow update: if request.auth != null;
+      allow update: if request.auth != null 
+                    && resource.data.authorId == request.auth.uid;
       allow delete: if request.auth != null
                     && resource.data.authorId == request.auth.uid;
     }
 
-    // Mentor reviews - public read, authenticated write.
+    // Mentor reviews - public read, authenticated client write
     match /mentor_reviews/{reviewId} {
       allow read: if true;
       allow create: if request.auth != null

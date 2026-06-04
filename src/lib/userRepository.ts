@@ -32,11 +32,10 @@ export const getUserDoc = async (uid: string): Promise<UserType | null> => {
       displayName: data.displayName || 'User',
       email: data.email || '',
       phone: data.phone || '',
-      role: data.role || 'user',
+      role: data.role === 'user' ? 'seeker' : (data.role || 'seeker'),
       domains: data.domains || [],
       isAnonymous: data.isAnonymous || false,
       onboardingComplete: data.onboardingComplete || false,
-      createdAt: data.createdAt?.toDate?.() || data.createdAt || new Date(),
       photoURL: data.photoURL || '',
       bio: data.bio || '',
       city: data.city || '',
@@ -44,6 +43,8 @@ export const getUserDoc = async (uid: string): Promise<UserType | null> => {
       ageGroup: data.ageGroup || '',
       mentorInterests: data.mentorInterests || [],
       onboardingStep: data.onboardingStep,
+      ...data,
+      createdAt: data.createdAt?.toDate?.() || data.createdAt || new Date(),
     }
   } catch (error) {
     console.error('Error in getUserDoc:', error)
@@ -61,11 +62,10 @@ export const subscribeToUserDoc = (uid: string, callback: (user: UserType | null
         displayName: data.displayName || 'User',
         email: data.email || '',
         phone: data.phone || '',
-        role: data.role || 'user',
+        role: data.role === 'user' ? 'seeker' : (data.role || 'seeker'),
         domains: data.domains || [],
         isAnonymous: data.isAnonymous || false,
         onboardingComplete: data.onboardingComplete || false,
-        createdAt: data.createdAt?.toDate?.() || data.createdAt || new Date(),
         photoURL: data.photoURL || '',
         bio: data.bio || '',
         city: data.city || '',
@@ -73,6 +73,8 @@ export const subscribeToUserDoc = (uid: string, callback: (user: UserType | null
         ageGroup: data.ageGroup || '',
         mentorInterests: data.mentorInterests || [],
         onboardingStep: data.onboardingStep,
+        ...data,
+        createdAt: data.createdAt?.toDate?.() || data.createdAt || new Date(),
       }
       callback(user)
     } else {

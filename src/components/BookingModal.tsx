@@ -7,6 +7,8 @@ import { LIFE_DOMAINS, type DomainId, type Mentor } from '@/types';
 import { MENTOR_CATEGORIES, getCategoryPrices, getSessionPrice, normalizeMentorCategories } from '@/lib/pricing';
 import { initiateRazorpayPayment } from '@/lib/razorpay';
 import { createBooking, confirmPayment } from '@/lib/bookingRepository';
+import { doc, updateDoc } from 'firebase/firestore';
+import { db } from '@/lib/firebase';
 import './BookingModal.css';
 
 interface BookingModalProps {
@@ -29,6 +31,8 @@ export default function BookingModal({ guide, isOpen, onClose, onSuccess }: Book
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [bookingId, setBookingId] = useState('');
+  const [whatsappConsent, setWhatsappConsent] = useState(user ? (user as any).whatsappNotificationsEnabled !== false : true);
+  const [whatsappPhone, setWhatsappPhone] = useState(user ? ((user as any).phone || (user as any).phoneNumber || '') : '');
 
   const [agreedToTerms, setAgreedToTerms] = useState(false);
   const [showTermsModal, setShowTermsModal] = useState(false);
@@ -81,6 +85,22 @@ export default function BookingModal({ guide, isOpen, onClose, onSuccess }: Book
     try {
       setLoading(true);
       setError('');
+
+      // Save WhatsApp notifications consent preference to Firestore user doc
+      try {
+        const userRef = doc(db, 'users', user.uid);
+        await updateDoc(userRef, {
+          whatsappNotificationsEnabled: whatsappConsent,
+          phone: whatsappPhone,
+          phoneNumber: whatsappPhone
+        });
+        // Also update local store user data
+        (user as any).whatsappNotificationsEnabled = whatsappConsent;
+        (user as any).phone = whatsappPhone;
+        (user as any).phoneNumber = whatsappPhone;
+      } catch (prefErr) {
+        console.error('Failed to save WhatsApp preferences to user document:', prefErr);
+      }
 
       // 1. Create a pending booking in Firestore
       console.log('Creating booking draft...');
@@ -347,6 +367,8 @@ export default function BookingModal({ guide, isOpen, onClose, onSuccess }: Book
               <SlotSelection
                 guideId={mentorId}
                 guidePrice={activeSessionPrice}
+                selectedCategory={selectedCategory}
+                selectedDuration={selectedDuration}
                 onSlotSelect={handleSlotSelect}
               />
             </div>
@@ -411,6 +433,47 @@ export default function BookingModal({ guide, isOpen, onClose, onSuccess }: Book
                 <label htmlFor="booking-terms-check">
                   I have read and agree to the website <button type="button" onClick={() => setShowTermsModal(true)} className="booking-terms-link">terms and conditions *</button>
                 </label>
+              </div>
+
+              <div className="booking-terms-checkbox" style={{ marginTop: 'var(--sp-4)', display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)', alignItems: 'flex-start', width: '100%' }}>
+                <p className="body-sm font-semibold" style={{ margin: 0 }}>WhatsApp Updates Consent</p>
+                <p className="body-sm text-muted" style={{ margin: 0 }}>Would you like to receive session confirmations, reminders, and updates on WhatsApp?</p>
+                <div className="flex gap-4" style={{ marginTop: 'var(--sp-1)' }}>
+                  <label className="flex items-center gap-2 body-sm cursor-pointer" style={{ color: 'var(--clr-text)', fontWeight: 500 }}>
+                    <input
+                      type="radio"
+                      name="booking-whatsapp-consent"
+                      checked={whatsappConsent === true}
+                      onChange={() => setWhatsappConsent(true)}
+                      style={{ accentColor: 'var(--clr-primary)' }}
+                    />
+                    Yes, enable WhatsApp updates
+                  </label>
+                  <label className="flex items-center gap-2 body-sm cursor-pointer" style={{ color: 'var(--clr-text)', fontWeight: 500 }}>
+                    <input
+                      type="radio"
+                      name="booking-whatsapp-consent"
+                      checked={whatsappConsent === false}
+                      onChange={() => setWhatsappConsent(false)}
+                      style={{ accentColor: 'var(--clr-primary)' }}
+                    />
+                    No, use app notifications only
+                  </label>
+                </div>
+                {whatsappConsent && (
+                  <div className="form-group animate-fadeIn" style={{ marginTop: 'var(--sp-2)', width: '100%' }}>
+                    <label className="form-label">WhatsApp Phone Number</label>
+                    <input
+                      type="tel"
+                      className="form-input"
+                      style={{ background: 'var(--clr-bg)' }}
+                      placeholder="e.g. 8920463196"
+                      value={whatsappPhone}
+                      onChange={(e) => setWhatsappPhone(e.target.value)}
+                      required={whatsappConsent}
+                    />
+                  </div>
+                )}
               </div>
             </div>
           )}
